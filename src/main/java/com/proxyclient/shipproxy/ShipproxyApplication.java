@@ -1,6 +1,5 @@
 package com.proxyclient.shipproxy;
 
-import com.proxyclient.shipproxy.constants.ShipProxyCodes;
 import com.proxyclient.shipproxy.model.ProxyRequest;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -12,8 +11,10 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+
+import static com.proxyclient.shipproxy.constants.ShipProxyCodes.*;
 
 @SpringBootApplication
 public class ShipproxyApplication {
@@ -23,9 +24,34 @@ public class ShipproxyApplication {
 
     public static void main(String[] args) throws IOException {
 
-        socket = new Socket(ShipProxyCodes.OFFSHORE_HOST, ShipProxyCodes.OFFSHORE_PORT);
+        socket = connectWithRetry();
         SpringApplication.run(ShipproxyApplication.class, args);
         new Thread(() -> processQueue(socket)).start();
+    }
+
+    private static Socket connectWithRetry() throws IOException {
+        int attempt = 0;
+        while (attempt < MAX_RETRIES) {
+            try {
+                System.out.println("Attempting to connect to " + OFFSHORE_HOST + ":" + OFFSHORE_PORT + " (Attempt " + (attempt + 1) + ")");
+                Socket s = new Socket(OFFSHORE_HOST, OFFSHORE_PORT);
+                System.out.println("Connected successfully to offshore proxy!");
+                return s;
+            } catch (IOException e) {
+                attempt++;
+                if (attempt == MAX_RETRIES) {
+                    throw new IOException("Failed to connect to " + OFFSHORE_HOST + ":" + OFFSHORE_PORT + " after " + MAX_RETRIES + " attempts", e);
+                }
+                System.out.println("Connection failed: " + e.getMessage() + ". Retrying in " + RETRY_DELAY_MS + "ms...");
+                try {
+                    TimeUnit.MILLISECONDS.sleep(RETRY_DELAY_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while waiting to retry", ie);
+                }
+            }
+        }
+        throw new IOException("Unexpected exit from retry loop"); // Should never reach here
     }
 
     private static void processQueue(Socket socket) {

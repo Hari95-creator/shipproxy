@@ -43,7 +43,7 @@
 	</dependencies>
 
 	<build>
-		<finalName>shipProxy</finalName>
+		<finalName>shipProxyClient</finalName>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
