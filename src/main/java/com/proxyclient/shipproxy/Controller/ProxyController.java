@@ -12,45 +12,119 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
+
+import static com.proxyclient.shipproxy.constants.ShipProxyCodes.OFFSHORE_HOST;
+import static com.proxyclient.shipproxy.constants.ShipProxyCodes.OFFSHORE_PORT;
 
 @RestController
 public class ProxyController {
-
     private static final Logger logger = LoggerFactory.getLogger(ProxyController.class);
-    private final Socket offshoreSocket;
+    private final Object socketLock = new Object();
+    private Socket offshoreSocket;
 
     public ProxyController(Socket offshoreSocket) {
         this.offshoreSocket = offshoreSocket;
+        initializeSocket();
+    }
+
+    private void initializeSocket() {
+        synchronized (socketLock) {
+            try {
+                if (offshoreSocket != null && !offshoreSocket.isClosed()) {
+                    offshoreSocket.close();
+                }
+                offshoreSocket = new Socket(OFFSHORE_HOST, OFFSHORE_PORT);
+                offshoreSocket.setSoTimeout(15000); // Increased to 15 seconds
+                logger.info("Socket to offshoreserver initialized with timeout 15s");
+            } catch (IOException e) {
+                logger.error("Failed to initialize socket to offshoreserver", e);
+                throw new RuntimeException("Socket initialization failed", e);
+            }
+        }
     }
 
     @RequestMapping("/**")
     public ResponseEntity<String> proxyRequest(HttpServletRequest request) throws IOException {
+        long startTime = System.currentTimeMillis();
+        logger.info("Received request from client for URL: {}", request.getRequestURL());
 
+        synchronized (socketLock) {
+            if (offshoreSocket == null || offshoreSocket.isClosed() || !offshoreSocket.isConnected()) {
+                logger.warn("Socket to offshoreserver is invalid, reinitializing...");
+                initializeSocket();
+            }
+        }
+
+        // Construct the HTTP request to forward
         String targetUrl = request.getRequestURL().toString();
         if (request.getQueryString() != null) {
             targetUrl += "?" + request.getQueryString();
         }
 
-        String requestLine = "GET " + targetUrl + " HTTP/1.1\r\n" +
-                "Host: " + new java.net.URL(targetUrl).getHost() + "\r\n" +
-                "User-Agent: curl/7.79.1\r\n" +
-                "Accept: */*\r\n" +
-                "\r\n";
+        StringBuilder requestBuilder = new StringBuilder();
+        requestBuilder.append(request.getMethod()).append(" ").append(targetUrl).append(" HTTP/1.1\r\n");
+        requestBuilder.append("Host: ").append(new java.net.URL(targetUrl).getHost()).append("\r\n");
+        request.getHeaderNames().asIterator().forEachRemaining(headerName -> {
+            if (!headerName.equalsIgnoreCase("host")) {
+                requestBuilder.append(headerName).append(": ").append(request.getHeader(headerName)).append("\r\n");
+            }
+        });
+        requestBuilder.append("\r\n");
+
+        String requestLine = requestBuilder.toString();
         logger.info("Forwarding request to offshoreserver: {}", requestLine);
 
-        PrintWriter writer = new PrintWriter(offshoreSocket.getOutputStream(), true);
-        writer.println(requestLine);
+        // Send request to offshoreserver
+        long sendStartTime = System.currentTimeMillis();
+        PrintWriter writer = null;
+        try {
+            writer = new PrintWriter(offshoreSocket.getOutputStream(), true);
+            writer.println(requestLine);
+        } catch (IOException e) {
+            logger.error("Failed to send request to offshoreserver", e);
+            synchronized (socketLock) {
+                if (writer != null) writer.close();
+                initializeSocket();
+                writer = new PrintWriter(offshoreSocket.getOutputStream(), true);
+                writer.println(requestLine);
+            }
+        }
+        long sendEndTime = System.currentTimeMillis();
+        logger.info("Time to send request to offshoreserver: {} ms", (sendEndTime - sendStartTime));
 
-        BufferedReader reader = new BufferedReader(new InputStreamReader(offshoreSocket.getInputStream()));
+        // Read response from offshoreserver
+        long readStartTime = System.currentTimeMillis();
+        BufferedReader reader = null;
         StringBuilder response = new StringBuilder();
         String line;
-        while ((line = reader.readLine()) != null && !line.isEmpty()) {
-            response.append(line).append("\r\n");
+        boolean headersEnded = false;
+        try {
+            reader = new BufferedReader(new InputStreamReader(offshoreSocket.getInputStream()));
+            while ((line = reader.readLine()) != null) {
+                if (line.isEmpty() && !headersEnded) {
+                    headersEnded = true;
+                    continue;
+                }
+                response.append(line).append("\r\n");
+                logger.debug("Received line from offshoreserver: {}", line);
+            }
+        } catch (SocketTimeoutException e) {
+            logger.error("Timeout reading response from offshoreserver", e);
+            throw new IOException("Timeout reading response", e);
+        } catch (IOException e) {
+            logger.error("Error reading response from offshoreserver", e);
+            throw e;
+        } finally {
+            if (reader != null) reader.close();
         }
-        logger.info("Received response from offshoreserver: {}", response);
+        long readEndTime = System.currentTimeMillis();
+        logger.info("Time to read response from offshoreserver: {} ms", (readEndTime - readStartTime));
+        logger.info("Received full response from offshoreserver: {}", response);
 
-        return ResponseEntity.ok()
-                .header("Content-Type", "text/html; charset=UTF-8")
-                .body(response.toString());
+        long totalTime = System.currentTimeMillis() - startTime;
+        logger.info("Total time to process request: {} ms", totalTime);
+
+        return ResponseEntity.ok().header("Content-Type", "text/html; charset=UTF-8").body(response.toString());
     }
 }
