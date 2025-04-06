@@ -35,7 +35,7 @@ public class ProxyController {
                     offshoreSocket.close();
                 }
                 offshoreSocket = new Socket(OFFSHORE_HOST, OFFSHORE_PORT);
-                offshoreSocket.setSoTimeout(15000); // Increased to 15 seconds
+                offshoreSocket.setSoTimeout(15000);
                 logger.info("Socket to offshoreserver initialized with timeout 15s");
             } catch (IOException e) {
                 logger.error("Failed to initialize socket to offshoreserver", e);
