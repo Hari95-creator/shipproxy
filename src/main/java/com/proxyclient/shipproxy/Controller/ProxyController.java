@@ -55,8 +55,6 @@ public class ProxyController {
                 initializeSocket();
             }
         }
-
-        // Construct the HTTP request to forward
         String targetUrl = request.getRequestURL().toString();
         if (request.getQueryString() != null) {
             targetUrl += "?" + request.getQueryString();
@@ -74,8 +72,6 @@ public class ProxyController {
 
         String requestLine = requestBuilder.toString();
         logger.info("Forwarding request to offshoreserver: {}", requestLine);
-
-        // Send request to offshoreserver
         long sendStartTime = System.currentTimeMillis();
         PrintWriter writer = null;
         try {
@@ -92,8 +88,6 @@ public class ProxyController {
         }
         long sendEndTime = System.currentTimeMillis();
         logger.info("Time to send request to offshoreserver: {} ms", (sendEndTime - sendStartTime));
-
-        // Read response from offshoreserver
         long readStartTime = System.currentTimeMillis();
         BufferedReader reader = null;
         StringBuilder response = new StringBuilder();
